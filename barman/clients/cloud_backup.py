@@ -20,6 +20,7 @@ import logging
 import os
 import re
 import tempfile
+from argparse import ArgumentTypeError
 from contextlib import closing
 from shutil import rmtree
 
@@ -45,7 +46,7 @@ from barman.exceptions import (
     UnrecoverableHookScriptError,
 )
 from barman.postgres import PostgreSQLConnection
-from barman.utils import check_backup_name, check_positive, check_size, force_str
+from barman.utils import check_aws_snapshot_lock_duration_range, check_aws_snapshot_cool_off_period_range, check_backup_name, check_positive, check_size, check_timestamp, force_str
 
 _find_space = re.compile(r"[\s]").search
 
@@ -419,6 +420,26 @@ def parse_arguments(args=None):
         "timing out (default: 3600 seconds)",
         type=check_positive,
     )
+    s3_arguments.add_argument(
+        "--aws-snapshot-lock-mode",
+        help="The lock mode to apply to the snapshot. Allowed values: 'governance'|'compliance'.",
+        choices=["governance", "compliance"],
+    )
+    s3_arguments.add_argument(
+        "--aws-snapshot-lock-duration",
+        help="The duration (in days) for which the snapshot should be locked. Must be between 1 and 36500. To lock a snapshopt, you must specify either this argument or --aws-snapshot-expiration-date, but not both.",
+        type=check_aws_snapshot_lock_duration_range,
+    )
+    s3_arguments.add_argument(
+        "--aws-snapshot-cool-off-period",
+        help="Specifies the cool-off period (in hours) for a snapshot in 'compliance' mode, allowing you to unlock or modify lock settings after it is locked. Must be between 1 and 72 hours. To lock the snapshot immediately without a cool-off period, leave this option unset.",
+        type=check_aws_snapshot_cool_off_period_range,
+    )
+    s3_arguments.add_argument(
+        "--aws-snapshot-expiration-date",
+        help="The expiration date for the snapshot in the format YYYY-MM-DDThh:mm:ss.sssZ. To lock a snapshopt, you must specify either this argument or --aws-snapshot-lock-duration, but not both.",
+        type=check_timestamp
+    )
     azure_arguments.add_argument(
         "--encryption-scope",
         help="The name of an encryption scope defined in the Azure Blob Storage "
@@ -434,8 +455,14 @@ def parse_arguments(args=None):
         help="The name of the Azure resource group to which the compute instance and "
         "disks defined by the --snapshot-instance and --snapshot-disk arguments belong.",
     )
-    return parser.parse_args(args=args)
 
+    parsed_args = parser.parse_args(args=args)
+
+    # Perform mutual exclusivity check
+    if parsed_args.aws_snapshot_lock_duration is not None and parsed_args.aws_snapshot_expiration_date is not None:
+        parser.error("You must specify either --aws-snapshot-lock-duration or --aws-snapshot-expiration-date, but not both.")
+
+    return parsed_args
 
 if __name__ == "__main__":
     main()
